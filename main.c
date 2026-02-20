@@ -13,6 +13,7 @@
 
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_EXIT 2001
+#define ID_TRAY_REFRESH 2002
 
 NOTIFYICONDATAA g_nid = {0};
 
@@ -20,6 +21,24 @@ float g_currentScale = 1.0f;
 POINT g_mousePos = {0, 0};
 BOOL g_isCursorHidden = FALSE;
 HCURSOR g_hOriginalCursor = NULL;
+
+const DWORD g_cursorIds[] = {
+    32512, // IDC_ARROW
+    32513, // IDC_IBEAM (Текст)
+    32514, // IDC_WAIT (Песочные часы)
+    32515, // IDC_CROSS (Крестик)
+    32516, // IDC_UPARROW
+    32642, // IDC_SIZENWSE
+    32643, // IDC_SIZENESW
+    32644, // IDC_SIZEWE
+    32645, // IDC_SIZENS
+    32646, // IDC_SIZEALL
+    32648, // IDC_NO
+    32649, // IDC_HAND (Рука/Ссылка)
+    32650, // IDC_APPSTARTING (Фоновая загрузка)
+    32651  // IDC_HELP
+};
+
 
 // Безопасное восстановление курсора
 void RestoreSystemCursor() {
@@ -47,19 +66,31 @@ HCURSOR CreateEmptyCursor() {
     return hEmpty;
 }
 
+void RefreshOriginalCursor() {
+    // Если старая копия была, удаляем её из памяти
+    if (g_hOriginalCursor) {
+        DestroyCursor(g_hOriginalCursor);
+    }
+    // Загружаем актуальный системный курсор и делаем свежую копию
+    HCURSOR hSystemArrow = LoadCursor(NULL, IDC_ARROW);
+    g_hOriginalCursor = CopyCursor(hSystemArrow);
+}
+
+
 void ToggleSystemCursor(BOOL hide) {
     if (hide && !g_isCursorHidden) {
-        HCURSOR hEmpty = CreateEmptyCursor();
-        if (hEmpty) {
-            // Заменяем стандартную стрелку (32512 = IDC_ARROW)
-            SetSystemCursor(hEmpty, 32512);
-            g_isCursorHidden = TRUE;
+        int count = sizeof(g_cursorIds) / sizeof(g_cursorIds[0]);
+        for (int i = 0; i < count; i++) {
+            HCURSOR hEmpty = CreateEmptyCursor();
+            if (hEmpty) {
+                SetSystemCursor(hEmpty, g_cursorIds[i]);
+            }
         }
+        g_isCursorHidden = TRUE;
     } else if (!hide && g_isCursorHidden) {
         RestoreSystemCursor();
     }
 }
-
 
 // Функция для добавления иконки в трей
 void AddTrayIcon(HWND hwnd) {
@@ -85,13 +116,15 @@ void RemoveTrayIcon() {
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_TRAYICON:
-            if (lParam == WM_RBUTTONUP) { // Клик правой кнопкой
+            if (lParam == WM_RBUTTONUP) {
                 POINT curPoint;
                 GetCursorPos(&curPoint);
                 HMENU hMenu = CreatePopupMenu();
-                InsertMenu(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, "Exit");
+                // Добавляем новый пункт
+                InsertMenu(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_REFRESH, "Refresh Cursor");
+                InsertMenu(hMenu, 1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+                InsertMenu(hMenu, 2, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, "Exit");
 
-                // Нужно для корректного фокуса меню
                 SetForegroundWindow(hwnd);
                 TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, curPoint.x, curPoint.y, 0, hwnd, NULL);
                 DestroyMenu(hMenu);
@@ -99,8 +132,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
 
         case WM_COMMAND:
-            if (LOWORD(wParam) == ID_TRAY_EXIT) {
-                DestroyWindow(hwnd); // Это вызовет WM_DESTROY и корректный выход
+            if (LOWORD(wParam) == ID_TRAY_REFRESH) {
+                RefreshOriginalCursor();
+                // Опционально: сбрасываем системные курсоры на случай багов
+                RestoreSystemCursor();
+            }
+            else if (LOWORD(wParam) == ID_TRAY_EXIT) {
+                DestroyWindow(hwnd);
             }
             break;
 
@@ -155,7 +193,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     atexit(RestoreSystemCursor);
 
     // Копируем оригинал до всех манипуляций
-    g_hOriginalCursor = CopyCursor(LoadCursor(NULL, IDC_ARROW));
+    // g_hOriginalCursor = CopyCursor(LoadCursor(NULL, IDC_ARROW));
+    // Вместо ручного CopyCursor в начале WinMain:
+    RefreshOriginalCursor();
 
     WNDCLASS wc = {0};
     wc.lpfnWndProc = WindowProc;
