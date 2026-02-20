@@ -113,6 +113,85 @@ void RemoveTrayIcon() {
     Shell_NotifyIconA(NIM_DELETE, &g_nid);
 }
 
+void UpdateOverlay(HWND hwnd) {
+    int screenX = GetSystemMetrics(SM_CXSCREEN);
+    int screenY = GetSystemMetrics(SM_CYSCREEN);
+    HDC hdcScreen = GetDC(NULL);
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+
+    // Если масштаб маленький — отправляем полностью прозрачный пустой слой
+    if (g_currentScale <= 1.15f) {
+        BITMAPINFO bmi = {0};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = 1; // Достаточно 1 пикселя
+        bmi.bmiHeader.biHeight = 1;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        void* pvBits;
+        HBITMAP hEmptyBmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &pvBits, NULL, 0);
+        // Зануляем пиксель (полная прозрачность)
+        *((DWORD*)pvBits) = 0x00000000;
+
+        HBITMAP hOld = (HBITMAP)SelectObject(hdcMem, hEmptyBmp);
+        SIZE size = { screenX, screenY };
+        POINT ptSrc = { 0, 0 };
+        BLENDFUNCTION blend = { AC_SRC_OVER, 0, 0, AC_SRC_ALPHA }; // Alpha = 0
+
+        UpdateLayeredWindow(hwnd, hdcScreen, NULL, &size, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+
+        SelectObject(hdcMem, hOld);
+        DeleteObject(hEmptyBmp);
+        DeleteDC(hdcMem);
+        ReleaseDC(NULL, hdcScreen);
+        return;
+    }
+
+    // 2. Создаем битмап с поддержкой альфа-канала (32 бита)
+    BITMAPINFO bmi = {0};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = screenX;
+    bmi.bmiHeader.biHeight = screenY;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;         // Важно: 32 бита для альфа-канала
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pvBits;
+    HBITMAP hBitmap = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &pvBits, NULL, 0);
+    HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBitmap);
+
+    // 3. Рисуем иконку
+    ICONINFO ii;
+    if (GetIconInfo(g_hOriginalCursor, &ii)) {
+        int baseSize = GetSystemMetrics(SM_CXCURSOR);
+        int newSize = (int)(baseSize * g_currentScale);
+        int offX = (int)(ii.xHotspot * g_currentScale);
+        int offY = (int)(ii.yHotspot * g_currentScale);
+
+        // Рисуем иконку в наш буфер в памяти
+        DrawIconEx(hdcMem, g_mousePos.x - offX, g_mousePos.y - offY,
+                   g_hOriginalCursor, newSize, newSize, 0, NULL, DI_NORMAL);
+
+        if (ii.hbmMask) DeleteObject(ii.hbmMask);
+        if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    }
+
+    // 4. Обновляем слой окна (это магия прозрачности)
+    POINT ptSrc = {0, 0};
+    SIZE size = {screenX, screenY};
+    BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+
+    UpdateLayeredWindow(hwnd, hdcScreen, NULL, &size, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+
+    // 5. Чистим за собой
+    SelectObject(hdcMem, hOldBmp);
+    DeleteObject(hBitmap);
+    DeleteDC(hdcMem);
+    ReleaseDC(NULL, hdcScreen);
+}
+
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_TRAYICON:
@@ -143,24 +222,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
 
         case WM_PAINT:
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            if (g_currentScale > 1.1f && g_hOriginalCursor != NULL) {
-                ICONINFO ii;
-                if (GetIconInfo(g_hOriginalCursor, &ii)) {
-                    int baseSize = GetSystemMetrics(SM_CXCURSOR);
-                    int newSize = (int)(baseSize * g_currentScale);
-                    int offX = (int)(ii.xHotspot * g_currentScale);
-                    int offY = (int)(ii.yHotspot * g_currentScale);
-
-                    DrawIconEx(hdc, g_mousePos.x - offX, g_mousePos.y - offY,
-                               g_hOriginalCursor, newSize, newSize, 0, NULL, DI_NORMAL);
-
-                    if (ii.hbmMask) DeleteObject(ii.hbmMask);
-                    if (ii.hbmColor) DeleteObject(ii.hbmColor);
-                }
-            }
-            EndPaint(hwnd, &ps);
             break;
 
         case WM_DESTROY:
@@ -210,7 +271,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
         NULL, NULL, hInstance, NULL);
 
-    SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+    //SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
     ShowWindow(hwnd, SW_SHOW);
     AddTrayIcon(hwnd);
 
@@ -261,14 +322,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
         // 4. Отрисовка
         if (g_currentScale > 1.15f) {
-            if (!g_isCursorHidden) ToggleSystemCursor(TRUE); // Скрываем только один раз
+            if (!g_isCursorHidden) ToggleSystemCursor(TRUE);
             g_mousePos = currentPos;
-            InvalidateRect(hwnd, NULL, TRUE);
+            UpdateOverlay(hwnd); // Рисуем увеличенный
         } else {
-            if (g_isCursorHidden) ToggleSystemCursor(FALSE); // Возвращаем только один раз
-            InvalidateRect(hwnd, NULL, TRUE);
+            if (g_isCursorHidden) {
+                ToggleSystemCursor(FALSE);
+                UpdateOverlay(hwnd);
+            }
         }
-
 
         if (dx != 0) lastDx = dx;
         if (dy != 0) lastDy = dy;
