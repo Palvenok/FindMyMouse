@@ -7,7 +7,7 @@
 
 #define MAX_SCALE 4.0f
 #define MIN_SCALE 1.0f
-#define GROW_SPEED 0.6f
+#define GROW_SPEED 0.4f
 #define DECAY_SPEED 0.3f
 #define THRESHOLD 40
 
@@ -296,21 +296,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         float dy = (float)(currentPos.y - lastPos.y);
 
         // 1. Проверяем резкую смену направления (разворот по X или Y)
-        // Если знак скорости изменился и скорость была приличной (> 10 пикселей)
-        if (((dx > 5 && lastDx < -5) || (dx < -5 && lastDx > 5) ||
-             (dy > 5 && lastDy < -5) || (dy < -5 && lastDy > 5))) {
+        // Если знак скорости изменился и скорость была приличной (> 30 пикселей)
+        if (((dx > 15 && lastDx < -15) || (dx < -15 && lastDx > 15) ||
+             (dy > 15 && lastDy < -15) || (dy < -15 && lastDy > 15))) {
 
             shakeCount++;
             lastShakeTime = GetTickCount(); // Запоминаем время рывка
-             }
+            }
 
         // 2. Если давно не трясли (более 400 мс), сбрасываем счетчик рывков
         if (GetTickCount() - lastShakeTime > 400) {
             shakeCount = 0;
         }
 
-        // 3. Активация: нужно сделать минимум 3-4 резких разворота
-        if (shakeCount >= 3) {
+        // 3. Активация: нужно сделать минимум 10 резких разворота
+        if (shakeCount >= 10) {
             g_currentScale += GROW_SPEED;
         } else {
             g_currentScale -= DECAY_SPEED;
